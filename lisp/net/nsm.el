@@ -298,9 +298,15 @@ See also: `nsm-tls-checks' and `nsm-noninteractive'"
                                  (format-message
 		                  "The TLS connection to %s:%s is insecure for the following reason%s:\n\n%s"
 		                  host port
-		                  (if (> (length results) 1)
+		                  (if (> (length problems) 1)
 			              "s" "")
-		                  (string-join (map-values results) "\n"))))
+		                  (concat "* " (string-join
+                                                (split-string
+                                                 (string-join
+                                                  (map-values results)
+                                                  "\n")
+                                                 "\n")
+                                                "\n* ")))))
                  (delete-process process)
                  (setq process nil)))
       (run-hook-with-args 'nsm-tls-post-check-functions
@@ -805,32 +811,92 @@ protocol."
 (set-advertised-calling-convention
  'nsm-query '(host port status what problems message) "27.1")
 
-(defun nsm-query-user (message args cert)
+(declare-function gnutls-format-certificate "gnutls.c" (cert))
+
+(defun nsm-query-user (message status)
   (catch 'return
     (while t
-      (let ((buffer (get-buffer-create "*Network Security Manager*")))
+      (let ((buffer (get-buffer-create "*Network Security Manager*"))
+            (cert-buffer (get-buffer-create "*Certificate Details*"))
+            (certs (plist-get status :certificates)))
         (save-window-excursion
           ;; First format the certificate and warnings.
-          (with-help-window buffer
-            (with-current-buffer buffer
-              (erase-buffer)
-              (when (> (length cert) 0)
-                (insert cert "\n"))
-              (let ((start (point)))
-                (insert (apply #'format-message message args))
-                (goto-char start)
-                ;; Fill the first line of the message, which usually
-                ;; contains lots of explanatory text.
-                (fill-region (point) (line-end-position)))))
+          (with-current-buffer-window
+           buffer nil nil
+           (insert (nsm-format-certificate status))
+           (insert message)
+           (goto-char (point-min))
+           ;; Fill the first line of the message, which usually
+           ;; contains lots of explanatory text.
+           (fill-region (point) (line-end-position)))
           ;; Then ask the user what to do about it.
           (pcase (unwind-protect
-                     (cadr
-                      (read-multiple-choice
-                       "Continue connecting?"
-                       '((?a "always" "Accept this certificate this session and for all future sessions.")
-                         (?s "session only" "Accept this certificate this session only.")
-                         (?n "no" "Refuse to use this certificate, and close the connection.")
-                         (?r "reshow" "Reshow certificate information."))))
+                     (let* ((accept-choices '((?a "always" "Accept this certificate this session and for all future sessions.")
+                                              (?s "session only" "Accept this certificate this session only.")
+                                              (?n "no" "Refuse to use this certificate, and close the connection.")
+                                              (?d "details" "See certificate details")
+                                              (?r "reshow" "Reshow certificate information.")))
+                            (details-choices '((?b "backward page" "See previous page")
+                                               (?f "forward page" "See next page")
+                                               (?n "next" "Next certificate")
+                                               (?p "previous" "Previous certificate")
+                                               (?q "quit" "Quit details view")))
+                            (answer (read-multiple-choice "Continue connecting?" accept-choices))
+                            (show-details (char-equal (car answer) ?d))
+                            (pems (cl-loop for cert in certs
+                                           collect (gnutls-format-certificate (plist-get cert :pem))))
+                            (cert-index 0))
+                       (while show-details
+                         (unless (get-buffer-window cert-buffer)
+                           (set-window-buffer (get-buffer-window buffer) cert-buffer)
+                           (with-current-buffer cert-buffer
+                             (read-only-mode -1)
+                             (insert (nth cert-index pems))
+                             (goto-char (point-min))
+                             (read-only-mode)))
+
+                         (setq answer (read-multiple-choice "Viewing certificate:" details-choices))
+
+                         (cond
+                          ((char-equal (car answer) ?q)
+                           (setq show-details (not show-details))
+                           (set-window-buffer (get-buffer-window cert-buffer) buffer)
+                           (setq show-details (char-equal
+                                               (car (setq answer
+                                                          (read-multiple-choice
+                                                           "Continue connecting?"
+                                                           accept-choices)))
+                                               ?d)))
+
+                          ((char-equal (car answer) ?b)
+                           (with-selected-window (get-buffer-window cert-buffer)
+                             (with-current-buffer cert-buffer
+                               (ignore-errors (scroll-down)))))
+
+                          ((char-equal (car answer) ?f)
+                           (with-selected-window (get-buffer-window cert-buffer)
+                             (with-current-buffer cert-buffer
+                               (ignore-errors (scroll-up)))))
+
+                          ((char-equal (car answer) ?n)
+                           (with-current-buffer cert-buffer
+                             (read-only-mode -1)
+                             (erase-buffer)
+                             (setq cert-index (mod (1+ cert-index) (length pems)))
+                             (insert (nth cert-index pems))
+                             (goto-char (point-min))
+                             (read-only-mode)))
+
+                          ((char-equal (car answer) ?p)
+                           (with-current-buffer cert-buffer
+                             (read-only-mode -1)
+                             (erase-buffer)
+                             (setq cert-index (mod (1- cert-index) (length pems)))
+                             (insert (nth cert-index pems))
+                             (goto-char (point-min))
+                             (read-only-mode)))))
+                       (cadr answer))
+                   (kill-buffer cert-buffer)
                    (kill-buffer buffer))
             ("reshow")
             (val (throw 'return val))))))))
@@ -938,49 +1004,42 @@ protocol."
   (let ((cert (plist-get status :certificate)))
     (when cert
       (with-temp-buffer
-	(insert
-	 "Certificate information\n"
-	 "Issued by:"
+        (insert
+	 (propertize "Certificate information" 'face 'underline) "\n"
+	 "  Issued by:"
 	 (nsm-certificate-part (plist-get cert :issuer) "CN" t) "\n"
-	 "Issued to:"
+	 "  Issued to:"
 	 (or (nsm-certificate-part (plist-get cert :subject) "O")
 	     (nsm-certificate-part (plist-get cert :subject) "OU" t))
 	 "\n"
-	 "Hostname:"
+	 "  Hostname:"
 	 (nsm-certificate-part (plist-get cert :subject) "CN" t) "\n")
 	(when (and (plist-get cert :public-key-algorithm)
 		   (plist-get cert :signature-algorithm))
+	  (insert "  Public key:" (plist-get cert :public-key-algorithm) "\n")
+          (insert "  Signature:" (plist-get cert :signature-algorithm) "\n"))
+        (when (plist-get cert :certificate-security-level)
 	  (insert
-	   "Public key:" (plist-get cert :public-key-algorithm)
-	   ", signature: " (plist-get cert :signature-algorithm) "\n"))
-	(when (and (plist-get status :key-exchange)
-		   (plist-get status :cipher)
-		   (plist-get status :mac)
-                   (plist-get status :protocol)
-                   (plist-get status :compression))
-	  (insert
-	   "Protocol:" (plist-get status :protocol)
-           ", safe renegotiation: " (if (plist-get status :safe-renegotiation) "YES" "NO")
-	   ", compression: " (plist-get status :compression)
-	   ", encrypt-then-MAC: " (if (plist-get status :encrypt-then-mac) "YES" "NO")
-	   ", key: " (plist-get status :key-exchange)
-           (if (string-match "^\\bDHE\\b" (plist-get status :key-exchange))
-               (concat ", prime bits: " (format "%s" (plist-get status :diffie-hellman-prime-bits)))
-             "")
-	   ", cipher: " (plist-get status :cipher)
-	   ", mac: " (plist-get status :mac) "\n"))
-	(when (plist-get cert :certificate-security-level)
-	  (insert
-	   "Security level:"
+	   "  Security level:"
 	   (propertize (plist-get cert :certificate-security-level)
 		       'face 'bold)
 	   "\n"))
 	(insert
-	 "Valid:From " (plist-get cert :valid-from)
-	 " to " (plist-get cert :valid-to) "\n\n")
-	(goto-char (point-min))
+	 "  Valid:From " (plist-get cert :valid-from)
+	 " to " (plist-get cert :valid-to) "\n")
+        ;; Handshake parameters
+        (insert (propertize "Session information" 'face 'underline) "\n")
+	(insert "  Version:" (plist-get status :protocol) "\n")
+        (insert "  Safe renegotiation:" (if (plist-get status :safe-renegotiation) "Yes" "No") "\n")
+	(insert "  Compression:" (plist-get status :compression) "\n")
+	(insert "  Encrypt-then-MAC:" (if (plist-get status :encrypt-then-mac) "Yes" "No") "\n")
+        (insert "  Cipher suite:" (nsm-cipher-suite status) "\n")
+        (if (string-match "^\\bDHE\\b" (plist-get status :key-exchange))
+            (insert "  DH prime bits:" (format "%d" (plist-get status :diffie-hellman-prime-bits)) "\n")
+          (insert "\n"))
+        (goto-char (point-min))
 	(while (re-search-forward "^[^:]+:" nil t)
-	  (insert (make-string (- 20 (current-column)) ? )))
+	  (insert (make-string (- 22 (current-column)) ? )))
 	(buffer-string)))))
 
 (defun nsm-certificate-part (string part &optional full)
