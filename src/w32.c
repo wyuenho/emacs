@@ -9199,7 +9199,8 @@ network_interface_get_info (Lisp_Object ifname)
 	  if (NILP (ifname))
 	    res = Fcons (Fcons (build_string (namebuf),
 				conv_sockaddr_to_lisp ((struct sockaddr*) &sa,
-						       sizeof (struct sockaddr))),
+						       sizeof (struct sockaddr),
+                                                       false)),
 			 res);
 	  else if (strcmp (namebuf, SSDATA (ifname)) == 0)
 	    {
@@ -9246,7 +9247,8 @@ network_interface_get_info (Lisp_Object ifname)
 		  sa.sin_addr.s_addr = net_mask;
 		  sa.sin_port = 0;
 		  res = Fcons (conv_sockaddr_to_lisp ((struct sockaddr *) &sa,
-						      sizeof (struct sockaddr)),
+						      sizeof (struct sockaddr),
+                                                      false),
 			       res);
 		}
 	      else
@@ -9263,14 +9265,16 @@ network_interface_get_info (Lisp_Object ifname)
 		  sa.sin_addr.s_addr = bcast_addr;
 		  sa.sin_port = 0;
 		  res = Fcons (conv_sockaddr_to_lisp ((struct sockaddr *) &sa,
-						      sizeof (struct sockaddr)),
+						      sizeof (struct sockaddr),
+                                                      false),
 			       res);
 
 		  /* IP address.  */
 		  sa.sin_addr.s_addr = ip_addr;
 		  sa.sin_port = 0;
 		  res = Fcons (conv_sockaddr_to_lisp ((struct sockaddr *) &sa,
-						      sizeof (struct sockaddr)),
+						      sizeof (struct sockaddr),
+                                                      false),
 			       res);
 		}
 	      else
@@ -9288,7 +9292,8 @@ network_interface_get_info (Lisp_Object ifname)
 	      sa.sin_addr.s_addr = sys_inet_addr ("127.0.0.1");
 	      res = Fcons (Fcons (build_string ("lo"),
 				  conv_sockaddr_to_lisp ((struct sockaddr*) &sa,
-							 sizeof (struct sockaddr))),
+							 sizeof (struct sockaddr),
+                                                         false)),
 			   res);
 	    }
 	  else if (strcmp (SSDATA (ifname), "lo") == 0)
@@ -9304,15 +9309,18 @@ network_interface_get_info (Lisp_Object ifname)
 			   res);
 	      sa.sin_addr.s_addr = sys_inet_addr ("255.0.0.0");
 	      res = Fcons (conv_sockaddr_to_lisp ((struct sockaddr *) &sa,
-						  sizeof (struct sockaddr)),
+						  sizeof (struct sockaddr),
+                                                  false),
 			   res);
 	      sa.sin_addr.s_addr = sys_inet_addr ("0.0.0.0");
 	      res = Fcons (conv_sockaddr_to_lisp ((struct sockaddr *) &sa,
-						  sizeof (struct sockaddr)),
+						  sizeof (struct sockaddr),
+                                                  false),
 			   res);
 	      sa.sin_addr.s_addr = sys_inet_addr ("127.0.0.1");
 	      res = Fcons (conv_sockaddr_to_lisp ((struct sockaddr *) &sa,
-						  sizeof (struct sockaddr)),
+						  sizeof (struct sockaddr),
+                                                  false),
 			   res);
 	    }
 
